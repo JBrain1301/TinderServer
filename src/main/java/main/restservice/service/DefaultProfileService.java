@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 @Component
 public class DefaultProfileService implements ProfileService {
     private final ProfileDao profileDao;
+    private final Set<String> loggedUsers = new HashSet<>();
     private static final Logger log = LoggerFactory.getLogger(DefaultProfileService.class);
     private static final Map<String, List<String>> womansProfile = new HashMap<>();
     private static final Map<String, List<String>> mansProfile = new HashMap<>();
@@ -42,14 +43,24 @@ public class DefaultProfileService implements ProfileService {
     }
 
     public List<ProfileData> getMatchList(String name) {
+        if (!loggedUsers.contains(name)) {
+            return null;
+        }
         List<Profile> matchList = profileDao.getMatchList(name);
         List<ProfileData> data = new ArrayList<>();
         matchList.forEach(match -> data.add(profileToProfileData(match)));
         return data;
     }
 
-    public void saveMatch(String name, String matchName) {
-        profileDao.saveMatch(new Match(name, matchName));
+    public String saveMatch(ObjectNode json) {
+        if (loggedUsers.contains(json.get("name").asText())) {
+            profileDao.saveMatch(new Match(json.get("name").asText(), json.get("matchName").asText()));
+            if (checkMatch(json.get("name").asText(), json.get("matchName").asText())) {
+                return "Вы любимы";
+            }
+            return "Любимец добавлен";
+        }
+        return "Зарегестрируйтесь или войдите в профиль";
     }
 
     public boolean checkMatch(String name, String matchName) {
@@ -83,13 +94,10 @@ public class DefaultProfileService implements ProfileService {
     public ProfileData getRandomProfile() {
         log.info("Получение случайного профиля");
         Profile profile = profileDao.getRandomProfile();
-        if (profile == null) {
-            return null;
-        }
-        return new ProfileData(profile.getId(), profile.getUserName(), profile.getDescription());
+        return profile == null ? null : new ProfileData(profile.getId(), profile.getUserName(), profile.getDescription());
     }
 
-     public List<String> getAllMansProfile() {
+    public List<String> getAllMansProfile() {
         return profileDao.getMansProfiles().stream()
                 .map(Profile::getUserName)
                 .collect(Collectors.toList());
@@ -116,9 +124,13 @@ public class DefaultProfileService implements ProfileService {
     }
 
 
-    public void changeDescription(String name, String description) {
+    public String changeDescription(ObjectNode json) {
         log.debug("Изменение описания");
-        profileDao.changeDescription(name, description);
+        if (loggedUsers.contains(json.get("name").asText())) {
+            profileDao.changeDescription(json.get("name").asText(), json.get("description").asText());
+            return "успех";
+        }
+        return "Зарегестрируйтесь или войдите в профиль";
     }
 
     public void saveProfileFromNode(ObjectNode json) {
@@ -128,24 +140,59 @@ public class DefaultProfileService implements ProfileService {
     }
 
     public ProfileData getNext(String name) {
-        if (womansProfile.containsKey(name)) {
-            if (womansProfile.get(name).size() > 0) {
-                return profileToProfileData(getProfileByName(womansProfile.get(name).remove(0)));
-            }
-            return null;
-        } else if (mansProfile.containsKey(name)) {
-            if (mansProfile.get(name).size() > 0) {
-                return profileToProfileData(getProfileByName(mansProfile.get(name).remove(0)));
-            }
+        if (!loggedUsers.contains(name)) {
+            return getRandomProfile();
+        }
+        if (womansProfile.containsKey(name) && womansProfile.get(name).size() > 0) {
+            return profileToProfileData(getProfileByName(womansProfile.get(name).remove(0)));
+        }
+        if (mansProfile.containsKey(name) && mansProfile.get(name).size() > 0) {
+            return profileToProfileData(getProfileByName(mansProfile.get(name).remove(0)));
         }
         return null;
     }
 
-    public void removeUser(String name) {
+    public String register(ObjectNode json) {
+        Profile profile = getProfileByName(json.get("name").asText());
+        if (profile == null) {
+            if (json.get("gender").asText().equalsIgnoreCase("сударь") || json.get("gender").asText().equalsIgnoreCase("сударыня")) {
+                loggedUsers.add(json.get("name").asText());
+                saveProfileFromNode(json);
+                return "успех";
+            } else {
+                return "Не правильный пол";
+            }
+        }
+        return "Пользователь с таким именем уже зарегестрирован.";
+    }
+
+    public ProfileData login(ObjectNode json) {
+        Profile profile = getProfileByName(json.get("name").asText());
+        if (profile != null) {
+            if (profile.getPassword().equals(json.get("password").asText())) {
+                log.debug("Пользователь существует: " + profile.getUserName());
+                loggedUsers.add(profile.getUserName());
+                return profileToProfileData(profile);
+            }
+        }
+        log.debug("Ошибка входа пользователя");
+        return null;
+    }
+
+    public String removeUser(ObjectNode json) {
+        if (loggedUsers.contains(json.get("name").asText())) {
+            remove(json.get("name").asText());
+            loggedUsers.remove(json.get("name").asText());
+            return "успех";
+        }
+        return "Зарегестрируйтесь или войдите в профиль";
+    }
+
+    public void remove(String name) {
         if (womansProfile.containsKey(name)) {
-            mansProfile.forEach((key,value) -> value.remove(name));
-        }else if (mansProfile.containsKey(name)) {
-            womansProfile.forEach((key,value) -> value.remove(name));
+            mansProfile.forEach((key, value) -> value.remove(name));
+        } else if (mansProfile.containsKey(name)) {
+            womansProfile.forEach((key, value) -> value.remove(name));
         }
         profileDao.deleteProfile(name);
     }
